@@ -578,7 +578,7 @@ pub extern "C" fn ZK_VerifyVCProof(
 
 ### 时间验证策略
 
-#### 当前实现（简化版本）
+#### 当前实现
 - **预检查**：在证明生成前验证 `current_time` 是否在 `[issue_date, expiry_date]` 范围内
 - **ZK 电路**：**不包含**时间约束
 - **公开输入**：**不包含** `current_time`
