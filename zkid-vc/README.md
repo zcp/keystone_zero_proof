@@ -649,6 +649,25 @@ impl ConstraintSynthesizer<Fr> for VCCircuit {
 }
 ```
 
+修改后，重新构建：
+```bash
+cd zklib
+./build-zklib.sh
+```
+
+## 🐛 调试
+
+启用详细输出：
+
+```bash
+# 在 enclave 代码中，添加更多 print_msg() 调用
+# 在主机代码中，添加更多 printf() 语句
+
+# 检查 enclave 是否正确加载
+ls -lh enclave1 enclave2 eyrie-rt loader.bin
+```
+
+
 **参考资料**：[arkworks r1cs-std comparison gadgets](https://github.com/arkworks-rs/r1cs-std)
 
 ### 安全参数
