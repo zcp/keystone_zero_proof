@@ -385,7 +385,7 @@ pub extern "C" fn ZK_VerifyProof(
     let proof_bytes = hex::decode(proof_hex_str)?;
     let proof = Proof::<Bn254>::deserialize_compressed(&proof_bytes)?;
     
-    // 2. 构造公开输入（顺序关键）
+    // 2. 构造公开输入
     let public_id_field = hash_to_field(&hex::decode(public_id)?);
     let nonce_field = Fr::from(nonce);
     let public_inputs = vec![public_id_field, nonce_field];
@@ -451,88 +451,125 @@ cd /usr/share/keystone/examples
 ```
 ### 预期输出
 ```
-╔═══════════════════════════════════════════════════════════╗
-║     ZK-ACL Identity Authentication for Keystone TEE      ║
-╚═══════════════════════════════════════════════════════════╝
+═══ Starting Verifier (Enclave2) ═══
 
-═══ 启动验证者 (Enclave2) ═══
-=== Enclave2: ZK 验证者与 ACL ===
-[Enclave2] ACL 已加载：3 个授权的 public_ids
-[Enclave2] 准备接受加入请求
+=== Enclave2: ZK Verifier with ACL (ZK lib inside Enclave) ===
+[Enclave2] ACL loaded: 3 authorized public_ids
+[Enclave2] Ready to accept join requests
 
-═══ 启动证明者 (Enclave1) ═══
-=== Enclave1: ZK 证明者 ===
-[Enclave1] 加载私有 user_id（从密封存储）
-[Enclave1] 计算 public_id（仅 SHA256 哈希）...
-[Enclave1] 计算得到 public_id: 39695f33deef7970...
-[Enclave1] 请求加入 GroupX...
+═══ Starting Prover (Enclave1) ═══
 
-[Host] 📤 转发加入请求
-[Host] 📬 收到加入请求
+=== Enclave1: ZK Prover (ZK lib inside Enclave) ===
+[Enclave1] Private user_id loaded (from sealed storage)
+[Enclave1] Computing public_id (SHA256 hash only)...
+[Enclave1] Computed public_id: 39695f33deef7970...
+[Enclave1] Requesting to join GroupX...
 
-[Enclave2] === 阶段 1：授权检查 ===
-[Enclave2] 收到加入请求：public_id: 3c8d9e7a4b6f1d2e...
-[Enclave2] 检查 ACL 授权...
-[Enclave2] ✓ 授权通过：public_id 在 ACL 中
+[Host] 📤 Forwarding join request (109 bytes)
+[Host] 📥 Waiting for join request...
+[Host] 📬 Got join request (109 bytes)
 
-[Enclave2] 为已授权用户初始化 ZK 系统...
-[Enclave2] 加载 Groth16 设置 (Rust+ark-groth16)...
-[Enclave2] ✓ ZK 系统初始化成功
-[Enclave2] ✓ PRNG 初始化完成 (enclave 内部随机源)
+[Enclave2] === Phase 1: Authorization ===
+[Enclave2] Join request received:
+  - public_id: 39695f33deef7970...
+  - group: GroupX
+[Enclave2] Checking authorization against ACL...
+[Enclave2-ACL] Checking ACL...
+[Enclave2] ✓ Authorization PASSED: public_id is in ACL
 
-[Enclave2] === 阶段 2：身份验证 ===
-[Enclave2] 生成挑战：nonce = 123456789
+[Enclave2] Initializing ZK system for authenticated user...
+[Enclave2] Loading Groth16 setup (Rust+ark-groth16)...
+[Enclave2] ✓ ZK system initialized successfully
+[Enclave2] ✓ PRNG initialized (enclave-internal random source)
 
-[Enclave1] ✓ 授权通过，收到挑战 nonce: 123456789
-[Enclave1] 为证明生成初始化 ZK 系统...
-[Enclave1] 加载 Groth16 设置 (Rust+ark-groth16)...
-[Enclave1] ✓ ZK 系统初始化成功
-[Enclave1] 生成 Groth16 ZK 证明 (ark-groth16)...
-[Enclave1] 证明生成成功 (十六进制长度: 256)
+[Enclave2] === Phase 2: Authentication ===
+[Enclave2] Challenge generated: nonce = 1640000003
+[Enclave2] Sending challenge to prover...
+[Host] 📤 Forwarding challenge (nonce: 1640000003)
 
-[Host] 📤 转发证明
-[Host] 📬 收到证明
+[Host] 📥 Waiting for challenge...
+[Host] 📬 Got challenge (nonce: 1640000003)
+[Enclave1] ✓ Authorization passed, received challenge nonce: 1640000003
+[Enclave1] Initializing ZK system for proof generation...
+[Enclave1] Loading Groth16 setup (Rust+ark-groth16)...
+[Enclave1] ✓ ZK system initialized successfully
+[Enclave1] Generating Groth16 ZK proof (ark-groth16)...
+[Enclave1] ✓ Proof generated successfully (hex len: 256)
+[Enclave1] Submitting proof to Enclave2...
 
-[Enclave2] === 阶段 3：验证 ===
-[Enclave2] 收到证明
-[Enclave2] ✓ 挑战验证通过
-[Enclave2] 验证 Groth16 ZK 证明 (ark-groth16)...
-[Enclave2] ✓✓✓ 验证成功 ✓✓✓
-[Enclave2] 证明者是：
-  - 已授权（在 ACL 中）
-  - 已认证（有效的 ZK 证明）
-  - 已验证（知道秘密的 user_id）
+[Host] 📤 Forwarding proof (4161 bytes)
+[Host] 📥 Waiting for proof...
+[Host] 📬 Got proof (4161 bytes)
 
-[Enclave1] 验证结果：VALID: 欢迎加入 GroupX
-[Enclave1] ✓ 成功：已认证和授权
+[Enclave2] === Phase 3: Verification ===
+[Enclave2] Waiting for proof...
+[Enclave2] Proof received:
+  - public_id: 39695f33deef7970...
+  - nonce: 1640000003
+  - proof length: 256 chars
+[Enclave2] ✓ Challenge verification PASSED
+[Enclave2] Verifying Groth16 ZK proof (ark-groth16)...
+[Enclave2] ✓✓✓ VERIFICATION SUCCESS ✓✓✓
+[Enclave2] Prover with public_id 39695f33deef7970... is:
+  - Authorized (in ACL)
+  - Authenticated (valid ZK proof)
+  - Verified (knows the secret user_id)
+[Host] 📤 Forwarding result: VALID: Welcome to GroupX
+[Enclave2] Ready to collaborate with verified member
 
-╔═══════════════════════════════════════════════════════════╗
-║                  测试成功完成                             ║
-╚═══════════════════════════════════════════════════════════╝
+[Host] 📥 Waiting for result...
+[Host] 📬 Got result: VALID: Welcome to GroupX
+[Enclave1] Verification result: VALID: Welcome to GroupX
+[Enclave1] ✓ SUCCESS: Authenticated and authorized
+[Enclave1] Ready to collaborate with GroupX members
+[Enclave1] ✓ Test completed successfully
+=== Enclave running ===
+=== Enclave completed successfully ===
+
+=== Enclave running ===
+[Enclave2] Verification session completed
+=== Enclave completed successfully ===
 ```
 
-### 拒绝请求的示例输出（双边资源优化）
+### 拒绝请求的示例输出
 ```
-[Enclave1] 加载私有 user_id（从密封存储）
-[Enclave1] 计算 public_id（仅 SHA256 哈希）...
-[Enclave1] 计算得到 public_id: 1234567890abcdef...
-[Enclave1] 请求加入 GroupX...
+═══ Starting Verifier (Enclave2) ═══
 
-[Host] 📤 转发加入请求
-[Host] 📬 收到加入请求
+=== Enclave2: ZK Verifier with ACL (ZK lib inside Enclave) ===
+[Enclave2] ACL loaded: 3 authorized public_ids
+[Enclave2] Ready to accept join requests
 
-[Enclave2] === 阶段 1：授权检查 ===
-[Enclave2] 收到加入请求：public_id: 1234567890abcdef...
-[Enclave2] 检查 ACL 授权...
-[Enclave2-ACL] 检查 ACL...
-[Enclave2] ✗ 授权失败：public_id 不在 ACL 中
-[Enclave2] 拒绝请求，无需 ZK 初始化（资源优化）
+═══ Starting Prover (Enclave1) ═══
 
-[Enclave1] ERROR: 加入请求被拒绝（不在 ACL 中）
-[Enclave1] 授权失败，无需 ZK 初始化
-[Enclave1] ✗ 失败：身份验证失败
+=== Enclave1: ZK Prover (ZK lib inside Enclave) ===
+[Enclave1] Private user_id loaded (from sealed storage)
+[Enclave1] Computing public_id (SHA256 hash only)...
+[Enclave1] Computed public_id: 1234567890abcdef...
+[Enclave1] Requesting to join GroupX...
 
-注意：Enclave1 和 Enclave2 都没有初始化昂贵的 ZK 系统
+[Host] 📤 Forwarding join request (109 bytes)
+[Host] 📥 Waiting for join request...
+[Host] 📬 Got join request (109 bytes)
+
+[Enclave2] === Phase 1: Authorization ===
+[Enclave2] Join request received:
+  - public_id: 1234567890abcdef...
+  - group: GroupX
+[Enclave2] Checking authorization against ACL...
+[Enclave2-ACL] Checking ACL...
+[Enclave2] ✗ Authorization FAILED: public_id not in ACL
+[Host] 📤 Forwarding result: REJECTED: Not in ACL
+[Enclave2] Rejecting request without ZK initialization (resource optimization)
+=== Enclave running ===
+=== Enclave completed (no report) ===
+
+[Host] 📥 Waiting for challenge...
+[Enclave1] ERROR: Join request rejected (not in ACL)
+[Enclave1] Authorization failed, no ZK initialization needed
+=== Enclave running ===
+=== Enclave completed (no report) ===
+
+Note: Both Enclave1 and Enclave2 avoided initializing the expensive ZK system
 ```
 
 ## 📊 技术细节
@@ -543,25 +580,43 @@ ZK 电路证明知道 `user_id`，其哈希等于 `public_id`：
 
 **电路定义**（来自 `zklib/src/lib.rs`）：
 ```rust
+// ZK Circuit: proves knowledge of user_id such that hash(user_id) == public_id
+#[derive(Clone)]
 struct UserIDCircuit {
-    user_id_hash: Option<Fr>,  // hash(user_id) - 私有见证
-    public_id: Option<Fr>,      // 声称的 public_id - 公开输入
-    nonce: Option<Fr>,          // 挑战 nonce - 公开输入
+    // Private witness
+    user_id_hash: Option<Fr>,
+    
+    // Public inputs
+    public_id: Option<Fr>,
+    nonce: Option<Fr>,
 }
 
 impl ConstraintSynthesizer<Fr> for UserIDCircuit {
     fn generate_constraints(self, cs: ConstraintSystemRef<Fr>) -> Result<(), SynthesisError> {
-        // 分配私有见证和公开输入
-        let user_id_hash_var = cs.new_witness_variable(...)?;
-        let public_id_var = cs.new_input_variable(...)?;
-        let nonce_var = cs.new_input_variable(...)?;
+        // Allocate private input
+        let user_id_hash_var = cs.new_witness_variable(|| {
+            self.user_id_hash.ok_or(SynthesisError::AssignmentMissing)
+        })?;
         
-        // 约束：user_id_hash == public_id
+        // Allocate public inputs
+        let public_id_var = cs.new_input_variable(|| {
+            self.public_id.ok_or(SynthesisError::AssignmentMissing)
+        })?;
+        
+        let nonce_var = cs.new_input_variable(|| {
+            self.nonce.ok_or(SynthesisError::AssignmentMissing)
+        })?;
+        
+        // Constraint: user_id_hash == public_id
         cs.enforce_constraint(
-            lc!() + user_id_hash_var,
-            lc!() + Variable::One,
-            lc!() + public_id_var,
+            ark_relations::lc!() + user_id_hash_var,
+            ark_relations::lc!() + ark_relations::r1cs::Variable::One,
+            ark_relations::lc!() + public_id_var,
         )?;
+        
+        // Nonce is included as public input (no constraint needed)
+        let _ = nonce_var;
+        
         Ok(())
     }
 }
@@ -587,8 +642,8 @@ ACL 在 `eapp2/enclave2.c` 中硬编码：
 ```c
 static const char* ACL_GroupX[] = {
     "39695f33deef797075fa1abb90f6838d58b9689f649236909634ec6f474c90bf",  // Alice: SHA256("alice_secret_12345")
-    "7f3a1e9d5c2b8f4e6a3c1d9e7b5f2a8d4c6e1b9f7a3d5c2e8b4f6a1d9c7e5b3f",  // Bob (示例)
-    "2d5e8b3f6a1c9e7d4b2f5a8c1e6d9b3a7f4c2e5b8d1a6f9c3e7b5a2d8f4c6e1b",  // Charlie (示例)
+    "7f3a1e9d5c2b8f4e6a3c1d9e7b5f2a8d4c6e1b9f7a3d5c2e8b4f6a1d9c7e5b3f",  // Bob (example)
+    "2d5e8b3f6a1c9e7d4b2f5a8c1e6d9b3a7f4c2e5b8d1a6f9c3e7b5a2d8f4c6e1b",  // Charlie (example)
     NULL
 };
 ```
@@ -603,13 +658,17 @@ static const char* ACL_GroupX[] = {
 挑战存储在固定大小的数组中：
 
 ```c
+#define MAX_CHALLENGES 10
 struct ChallengeRecord {
-    uint64_t nonce;         // 随机挑战
-    char public_id[65];     // 关联的 public_id
-    uint64_t timestamp;     // 创建时间
-    int used;               // 一次性使用标志
-    int active;             // 有效标志
+    uint64_t nonce;
+    char public_id[65];
+    uint64_t timestamp;
+    int used;
+    int active;
 };
+
+static struct ChallengeRecord challenges[MAX_CHALLENGES];
+static int challenge_count = 0;
 ```
 
 ## 🔬 使用场景
@@ -667,26 +726,29 @@ strncpy(join_req.group_name, "YourGroupName", sizeof(join_req.group_name) - 1);
 编辑 `zklib/src/lib.rs` 以添加更多约束：
 
 ```rust
-// 示例：添加年龄验证
+// Example: Adding age verification
 struct UserIDCircuit {
+    // Private witness
     user_id_hash: Option<Fr>,
+    age: Option<Fr>,        // New: private age
+    
+    // Public inputs
     public_id: Option<Fr>,
     nonce: Option<Fr>,
-    age: Option<Fr>,        // 新增：私有年龄
-    min_age: Option<Fr>,    // 新增：最低年龄要求
+    min_age: Option<Fr>,    // New: minimum age requirement
 }
 
 impl ConstraintSynthesizer<Fr> for UserIDCircuit {
     fn generate_constraints(self, cs: ConstraintSystemRef<Fr>) -> Result<(), SynthesisError> {
-        // 原始约束
+        // Original constraint: user_id_hash == public_id
         cs.enforce_constraint(
-            lc!() + user_id_hash_var,
-            lc!() + Variable::One,
-            lc!() + public_id_var,
+            ark_relations::lc!() + user_id_hash_var,
+            ark_relations::lc!() + ark_relations::r1cs::Variable::One,
+            ark_relations::lc!() + public_id_var,
         )?;
         
-        // 年龄验证：age >= min_age
-        // (实现需要 arkworks 的比较小工具)
+        // Age verification: age >= min_age
+        // (Implementation requires arkworks comparison gadgets)
         Ok(())
     }
 }
@@ -695,20 +757,8 @@ impl ConstraintSynthesizer<Fr> for UserIDCircuit {
 修改后，重新构建：
 ```bash
 cd zklib
-cargo build --release --target riscv64gc-unknown-linux-gnu
+./build-zklib.sh
 ```
-
-## 📝 与 zkid-auth 的比较
-
-| 特性 | zkid-auth | zkid-acl (本项目) |
-|---------|-----------|-----------------|
-| **ZK 库位置** | ❌ 主机（不可信） | ✅ Enclave（可信） |
-| **验证模型** | 点对点 (P2P) | 客户端-服务器 (基于 ACL) |
-| **ACL 支持** | ❌ 否 | ✅ 是 |
-| **多成员** | ❌ 仅 1 对 1 | ✅ 多对 1 |
-| **主机信任** | ⚠️ 必须信任主机 | ✅ 主机是不可信中继 |
-| **安全模型** | ⚠️ TCB 包括主机 | ✅ TCB 仅包括 enclave |
-| **使用场景** | 验证两个 enclave 是同一用户 | 验证 enclave 是授权成员 |
 
 ## 🐛 调试
 
@@ -742,19 +792,4 @@ ls -lh enclave1 enclave2 eyrie-rt loader.bin
 ## 📄 许可证
 
 本示例是 Keystone 项目的一部分，遵循相同的许可证。
-
-## 🤝 贡献
-
-欢迎贡献！改进方向：
-
-- [ ] 实现适当的 SHA256（目前简化）
-- [ ] 为 ACL 持久性添加密封存储
-- [ ] 实现基于 Groth16 的 ZK 证明
-- [ ] 为 ACL 条目添加撤销机制
-- [ ] 支持多个群组
-- [ ] 添加基于时间戳的挑战过期
-
----
-
-**用 ❤️ 为 Keystone TEE 构建**
 

@@ -149,20 +149,27 @@ Prover (E1)                Host                Verifier (E2)
 
 ## 🔐 可验证凭证 (VC) 结构
 
+**Rust 定义**（在 `zklib/src/lib.rs`）：
 ```rust
-struct VerifiableCredential {
-    // VC 元数据
-    holder_id: String,       // 持有者标识 (e.g., "alice@company.com")
-    issuer: String,          // 发行方标识
-    issue_date: u64,         // 签发时间戳
-    expiry_date: u64,        // 过期时间戳
-    
-    // VC 内容 (可扩展)
-    claims: Vec<(String, String)>,  // 键值对 (e.g., role="engineer")
-    
-    // 密码学绑定
-    signature: Vec<u8>,      // Issuer 的数字签名
+pub struct VerifiableCredential {
+    pub holder_id: String,          // 持有者 ID (e.g., "alice@company.com")
+    pub issuer: String,              // 发行方标识
+    pub issue_date: u64,             // 签发时间戳
+    pub expiry_date: u64,            // 过期时间戳
+    pub claims: Vec<(String, String)>, // 键值对声明 (e.g., role="engineer")
+    pub signature: Vec<u8>,          // Issuer 的 Ed25519 签名 (64 bytes)
 }
+```
+
+**C 定义**（在 `eapp1/enclave1.c` 和 `eapp2/enclave2.c`）：
+```c
+struct VerifiableCredential {
+    char holder_id[128];        // 持有者 ID
+    char issuer[64];            // 发行方标识
+    uint64_t issue_date;        // 签发时间戳 (Unix timestamp)
+    uint64_t expiry_date;       // 过期时间戳 (Unix timestamp)
+    char signature[129];        // Ed25519 签名 (hex: 128 chars + null)
+};
 ```
 
 **签名算法**：Ed25519（快速、安全、适合 TEE）
@@ -170,42 +177,57 @@ struct VerifiableCredential {
 ## 🧮 ZK 电路定义
 
 ```rust
+#[derive(Clone)]
 struct VCCircuit {
-    // 私密输入 (Witness)
-    vc_holder_id: Option<Fr>,
-    vc_issue_date: Option<Fr>,
-    vc_expiry_date: Option<Fr>,
-    vc_signature: Option<Vec<u8>>,
+    // 私密见证 (Private Witness)
+    vc_hash: Option<Fr>,                  // VC 内容的哈希（已验证签名）
     
     // 公开输入 (Public Inputs)
-    trusted_issuer_pubkey: Option<Vec<u8>>,
-    current_timestamp: Option<Fr>,
-    nonce: Option<Fr>,
+    issuer_pubkey_hash: Option<Fr>,      // Issuer 公钥的哈希
+    nonce: Option<Fr>,                    // 挑战随机数
 }
 
-// 约束条件
 impl ConstraintSynthesizer<Fr> for VCCircuit {
-    fn generate_constraints(self, cs: ConstraintSystemRef<Fr>) -> Result<()> {
-        // 约束 1: VC 签名有效
-        //   verify_ed25519_signature(
-        //     message = hash(vc_holder_id || vc_issue_date || vc_expiry_date),
-        //     signature = vc_signature,
-        //     public_key = trusted_issuer_pubkey
-        //   ) == true
+    fn generate_constraints(self, cs: ConstraintSystemRef<Fr>) -> Result<(), SynthesisError> {
+        // 分配私密输入
+        let vc_hash_var = cs.new_witness_variable(|| {
+            self.vc_hash.ok_or(SynthesisError::AssignmentMissing)
+        })?;
         
-        // 约束 2: VC 未过期
-        //   current_timestamp <= vc_expiry_date
+        // 分配公开输入
+        let issuer_pubkey_hash_var = cs.new_input_variable(|| {
+            self.issuer_pubkey_hash.ok_or(SynthesisError::AssignmentMissing)
+        })?;
         
-        // 约束 3: VC 已生效
-        //   vc_issue_date <= current_timestamp
+        let nonce_var = cs.new_input_variable(|| {
+            self.nonce.ok_or(SynthesisError::AssignmentMissing)
+        })?;
         
-        // 约束 4: 绑定 nonce（防重放）
-        //   nonce 被包含在证明中
+        // 约束 1: VC hash 一致性（证明知道有效的 VC）
+        cs.enforce_constraint(
+            ark_relations::lc!() + vc_hash_var,
+            ark_relations::lc!() + ark_relations::r1cs::Variable::One,
+            ark_relations::lc!() + vc_hash_var,
+        )?;
+        
+        // 约束 2: Issuer 公钥绑定
+        cs.enforce_constraint(
+            ark_relations::lc!() + issuer_pubkey_hash_var,
+            ark_relations::lc!() + ark_relations::r1cs::Variable::One,
+            ark_relations::lc!() + issuer_pubkey_hash_var,
+        )?;
+        
+        // 约束 3: Nonce 绑定（防重放）
+        let _ = nonce_var;  // 作为公开输入包含，无需额外约束
         
         Ok(())
     }
 }
 ```
+
+**重要说明**：
+- **Ed25519 签名验证**和**时间约束**在证明生成前完成（预检查），而非在 ZK 电路内
+- 生产环境可以在电路内实现完整的签名验证和时间约束（参见下文"扩展方向"）
 
 ## 🆚 与 zkid-acl 的对比
 
@@ -214,9 +236,11 @@ impl ConstraintSynthesizer<Fr> for VCCircuit {
 | **授权模型** | 中心化 ACL | 去中心化 VC |
 | **成员管理** | Verifier 维护列表 | Issuer 签发凭证 |
 | **Prover 持有** | 私密 `user_id` | 完整 VC (含签名) |
-| **ZK 证明** | `hash(user_id) == public_id` | `verify_signature(VC, issuer_pk)` |
-| **Verifier 存储** | 所有成员 ID | 只存 Issuer 公钥 |
-| **隐私保护** | 隐藏 user_id | 隐藏所有 VC 内容 |
+| **ZK 电路** | `user_id_hash == public_id` | `vc_hash` 一致性 + Issuer 绑定 |
+| **签名验证** | 无 | Ed25519（预检查） |
+| **时间验证** | 无 | issue_date/expiry_date（预检查） |
+| **Verifier 存储** | 所有成员 `public_id` | 只存 Issuer 公钥 |
+| **隐私保护** | 隐藏 `user_id` | 隐藏所有 VC 内容 |
 | **可扩展性** | ❌ 需手动添加成员 | ✅ Issuer 自主签发 |
 | **吊销机制** | ❌ 需从 ACL 删除 | ✅ 可实现 CRL/状态列表 |
 | **资源优化** | ✅ 延迟 ZK 初始化 | ✅ 延迟 ZK 初始化 |
@@ -262,8 +286,6 @@ let public_inputs = vec![
 ];
 ```
 
-**重要**：zkid-vc 的公开输入**不包含** `current_time`。时间验证在证明生成前完成（预检查），而非在 ZK 电路内约束。
-
 #### 私有输入（Witness）
 ```rust
 struct VCCircuit {
@@ -296,8 +318,6 @@ cs.enforce_constraint(
 // 约束 3: Nonce 绑定（防重放）
 let _ = nonce_var;  // 作为公开输入包含，无需额外约束
 ```
-
-**注意**：这是一个**简化的演示电路**。生产环境应在电路内验证 Ed25519 签名和时间约束（参见"扩展方向"）。
 
 ### 可验证凭证（VC）结构
 
@@ -712,12 +732,8 @@ cd /usr/share/keystone/examples
 ### 预期输出（成功场景）
 
 ```
-╔═══════════════════════════════════════════════════════════╗
-║     ZK-VC Identity Authentication for Keystone TEE       ║
-║         (Verifiable Credentials + Zero-Knowledge)         ║
-╚═══════════════════════════════════════════════════════════╝
+═══ Starting Verifier (Enclave2) ═══
 
-═══ 启动验证者 (Enclave2) ═══
 === Enclave2: VC Verifier (ZK lib inside Enclave) ===
 [Enclave2] Generating trusted Issuer public keys (deterministic)...
 [Enclave2] ✓ Generated real Ed25519 Issuer public keys
@@ -729,7 +745,8 @@ cd /usr/share/keystone/examples
 [Enclave2] NOTE: We do NOT maintain an ACL!
            Anyone with a valid VC from a trusted Issuer can join
 
-═══ 启动证明者 (Enclave1) ═══
+═══ Starting Prover (Enclave1) ═══
+
 === Enclave1: VC Prover (Real Ed25519 Signatures) ===
 [Enclave1] Loading VC from sealed storage...
 [Enclave1] Generating Issuer keypair (deterministic for testing)...
@@ -831,32 +848,66 @@ cd /usr/share/keystone/examples
            - What roles/claims I have
            - Any other VC details
 
-╔═══════════════════════════════════════════════════════════╗
-║            Test Completed Successfully                   ║
-╚═══════════════════════════════════════════════════════════╝
+=== Enclave running ===
+=== Enclave completed successfully ===
+
+=== Enclave running ===
+[Enclave2] Verification session completed
+=== Enclave completed successfully ===
 ```
 
 ### 预期输出（拒绝场景 - 未知群组）
 
 ```
+═══ Starting Verifier (Enclave2) ═══
+
+=== Enclave2: VC Verifier (ZK lib inside Enclave) ===
+[Enclave2] Generating trusted Issuer public keys (deterministic)...
+[Enclave2] ✓ Generated real Ed25519 Issuer public keys
+[Enclave2] Trusted Issuer Registry:
+  - HR Department: 1234567890abcdef...
+  - Government: fedcba9876543210...
+  - University: abcdef1234567890...
+[Enclave2] Ready to accept join requests
+[Enclave2] NOTE: We do NOT maintain an ACL!
+           Anyone with a valid VC from a trusted Issuer can join
+
+═══ Starting Prover (Enclave1) ═══
+
+=== Enclave1: VC Prover (Real Ed25519 Signatures) ===
 [Enclave1] Loading VC from sealed storage...
 [Enclave1] Generating Issuer keypair (deterministic for testing)...
 [Enclave1] ✓ Generated real Ed25519 Issuer keypair
-[Enclave1] VC loaded and signed
+[Enclave1] VC loaded and signed:
+  - Holder: alice@company.com
+  - Issuer: HR_Department
+  - Issue Date: 1609459200
+  - Expiry Date: 1735689599
+  - Signature: a1b2c3d4e5f6...
+[Enclave1] Verifying VC signature (self-check)...
+[Enclave1] ✓ VC signature verified successfully
+[Enclave1] ✓ VC is private, never leaves this enclave
 [Enclave1] Requesting to join UnknownGroup...
 
-[Host] 📤 Forwarding join request
-[Host] 📬 Got join request
+[Host] 📤 Forwarding join request (32 bytes)
+[Host] 📥 Waiting for join request...
+[Host] 📬 Got join request (32 bytes)
 
 [Enclave2] === Phase 1: Join Request ===
 [Enclave2] Join request for group: UnknownGroup
 [Enclave2] ✗ ERROR: Unknown group 'UnknownGroup'
+[Host] 📤 Forwarding result: REJECTED: Unknown group
 [Enclave2] No need to initialize ZK system (resource optimization)
+=== Enclave running ===
+=== Enclave completed (no report) ===
 
+[Host] 📥 Waiting for challenge...
 [Enclave1] ERROR: No challenge received (group unknown or rejected)
 [Enclave1] No need to initialize ZK system (resource optimization)
+=== Enclave running ===
+=== Enclave completed (no report) ===
 
-注意：Enclave1 和 Enclave2 都没有初始化昂贵的 ZK 系统
+Note: Both Enclave1 and Enclave2 avoided initializing the expensive ZK system
 ```
 
 
@@ -904,9 +955,5 @@ cd /usr/share/keystone/examples
 ## 📄 许可证
 
 本示例是 Keystone 项目的一部分，遵循相同的许可证。
-
----
-
-**Built with ❤️ for Decentralized Identity and Zero-Knowledge Proofs**
 
 
